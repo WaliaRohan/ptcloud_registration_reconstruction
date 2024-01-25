@@ -23,3 +23,7 @@ add_definitions(${PCL_DEFINITIONS})
 
 add_executable(pcl_read pcl_read.cpp)
 target_link_libraries(pcl_read ${PCL_LIBRARIES})
+
+add_executable(pcl_register pcl_registration.cpp)
+target_link_libraries(pcl_register ${PCL_LIBRARIES})
+
