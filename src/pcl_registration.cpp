@@ -7,9 +7,17 @@
 #include <pcl/keypoints/sift_keypoint.h>
 #include <pcl/features/normal_3d.h> 
 
+#include <pcl/filters/filter.h>
+
+// feature matching
+#include <pcl/features/fpfh.h>
+
 #include <pcl/visualization/pcl_visualizer.h> //visualization
 
 #include <chrono> // high_resolution_clock
+
+#include <vector> // for debugging
+#include <cmath>
 
 using XYZCloudPtr = pcl::PointCloud<pcl::PointXYZ>::Ptr;
 using NormalCloudPtr = pcl::PointCloud<pcl::PointNormal>::Ptr;
@@ -43,7 +51,7 @@ Feature based registration
 */
 
 
-NormalCloudPtr estimateNormalCloud(XYZCloudPtr cloudPtr)
+NormalCloudPtr estimateValidNormalCloud(XYZCloudPtr cloudPtr)
 {
     // Estimate the normals of the cloud_xyz -> normals help determine orientation of a surface -> https://pcl.readthedocs.io/projects/tutorials/en/master/normal_estimation.html#normal-estimation
     pcl::NormalEstimation<pcl::PointXYZ, pcl::PointNormal> ne;
@@ -54,7 +62,9 @@ NormalCloudPtr estimateNormalCloud(XYZCloudPtr cloudPtr)
     // // Create an emptyKdTree and pass it to the estimation object. KdTree enables efficient range searches and nearest neighbor searches -> https://pcl.readthedocs.io/projects/tutorials/en/latest/walkthrough.html#kdtree
     pcl::search::KdTree<pcl::PointXYZ>::Ptr tree_n(new pcl::search::KdTree<pcl::PointXYZ>());
     ne.setSearchMethod(tree_n); 
-    ne.setRadiusSearch(0.1); // Use all neighbors in a sphere of this radius in cm
+    // ne.setKSearch(5); // Search for given number of neighbors around each point -> faster
+    ne.setRadiusSearch(0.03); // Use all neighbors in a sphere of this radius in cm
+    // more info here: https://pcl.readthedocs.io/en/pcl-1.11.1/normal_estimation.html#selecting-the-right-scale
 
     std::cout << "Normal Estimation: Computing normals" << std::endl;
 
@@ -77,11 +87,12 @@ NormalCloudPtr estimateNormalCloud(XYZCloudPtr cloudPtr)
 
     // For more details on normal estimation, see: https://pcl.readthedocs.io/projects/tutorials/en/master/normal_estimation.html#normal-estimation 
 
-
-    // Note that the compute function would have only computed ther normal_x,
+    // Note that the compute function would have only computed the normal_x,
     // normal_y, normal_z and curvature values for Copy the xyz info from
     // the original pointcloud (see
     // https://pointclouds.org/documentation/point__types_8hpp_source.html#l00869)
+
+    std::vector<int> vec(3, 0); // for dubugging
 
     // So, below we copy x, y and z fields from cloudPtr to cloud_normals
     for(std::size_t i = 0; i<cloud_normals->size(); ++i)
@@ -89,43 +100,78 @@ NormalCloudPtr estimateNormalCloud(XYZCloudPtr cloudPtr)
         (*cloud_normals)[i].x = (*cloudPtr)[i].x;
         (*cloud_normals)[i].y = (*cloudPtr)[i].y;
         (*cloud_normals)[i].z = (*cloudPtr)[i].z;
+
+        if (std::isnan((*cloud_normals)[i].normal_x))
+            vec[0]++;
+        
+        if (std::isnan((*cloud_normals)[i].normal_x))
+            vec[1]++;
+
+        if (std::isnan((*cloud_normals)[i].normal_x))
+            vec[2]++;
     }
+
+    std::cout << vec[0] << " " << vec[1] << " " << vec[2] << std::endl;
+
+    // used for mapping points between input and output clouds -> not used here
+    // since input and output clouds are the same
+    std::vector<int> indices; 
+    pcl::removeNaNNormalsFromPointCloud (*cloud_normals, *cloud_normals, indices);
+
+    std::cout << cloud_normals->size() << std::endl;
 
     return cloud_normals;
 }
 
-pcl::SIFTKeypoint<pcl::PointNormal, pcl::PointWithScale> getSIFTKeypoints(NormalCloudPtr cloud_normals)
-{   // Parameters for sift computation - as defined in in pcl::SIFTKeypoint class
-
+pcl::PointCloud<pcl::PointWithScale>::Ptr getSIFTKeypoints(NormalCloudPtr cloud_normals)
+{  
     /*
-    standard deviation of the smallest scale in the scale space, or the
-    standard deviation of the smallest Gaussian used in the 
-    difference-of-Gaussian function (see original paper)
+    Parameters for sift computation - as defined in in pcl::SIFTKeypoint class
+
+    min_scale standard deviation of the smallest scale in the scale space, or the
+              standard deviation of the smallest Gaussian used in the 
+              difference-of-Gaussian function (see original paper)
     */
     constexpr float min_scale = 0.01f; // not sure why this value is used
     constexpr int n_octaves = 3; // number of octaves
     constexpr int n_scales_per_octave = 4; // scales per octave
     constexpr float min_contrast = 0.001f; // not sure why this value is used
 
+    std::cout << "Keypoint detection: Generating SIFT keypoints" << std::endl;
+
+    pcl::PointCloud<pcl::PointWithScale>::Ptr result (new pcl::PointCloud<pcl::PointWithScale>);
+
     // Estimate the sift interest points using normals values from xyz as the Intensity variants
     pcl::SIFTKeypoint<pcl::PointNormal, pcl::PointWithScale> sift;
-    pcl::PointCloud<pcl::PointWithScale> result;
     pcl::search::KdTree<pcl::PointNormal>::Ptr tree (new pcl::search::KdTree<pcl::PointNormal> ());
     sift.setSearchMethod(tree);
     sift.setScales(min_scale, n_octaves, n_scales_per_octave);
     sift.setMinimumContrast(min_contrast);
     sift.setInputCloud(cloud_normals);
-    sift.compute(result);
+    std::cout << "Going to compute result" << std::endl;
+    sift.compute(*result);
 
-    std::cout << "Keypoint Estimation: # of SIFT points in the result are "
-              << result.size() 
+    std::cout << "Keypoint detection: # of SIFT points in the result are "
+              << result->size() 
               << std::endl;
 
-    return sift;
+    return result;
 }
 
-void generatedFPFHEstimators()
+void generateFPFHfeatures(NormalCloudPtr cloud)
 {
+    // // Create FPFH estimation class object
+    pcl::FPFHEstimation<pcl::PointXYZ, pcl::Normal, pcl::FPFHSignature33> fpfh;
+    //fpfh.setInputNormals(*cloud);
+
+    // // Since no other search surface is given, we will create an empty kdtree
+    // // rerpesentation and pass it to the FPFH estimation object.
+    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
+    // fpfh.setSearchMethod (tree);
+
+    // // Output dataset
+    // pcl::PointCloud<pcl::FPFHSignature33>::Ptr fpfhs (new pcl::PointCloud<pcl::FPFHSignature33> ());
+    // fpfh.setRadiusSearch(0.05); // radius used here has to be larger than that used for estimating surface normals
 
 }
 
@@ -146,6 +192,8 @@ bool readPointCloud(std::string filePath, XYZCloudPtr cloudPtr)
 
     return true;
 }
+
+// This might come in handy: https://stackoverflow.com/questions/44605198/pointcloud-library-compute-sift-keypoints-input-cloud-error
 
 int main ()
 {
@@ -171,14 +219,14 @@ int main ()
     std::cout << "Estimating keypoints" << std::endl;
 
     // 2) Keypoint estimatation
-    NormalCloudPtr normalCloudPtrSource = estimateNormalCloud(cloudSource);
-    NormalCloudPtr normalCloudPtrTarget = estimateNormalCloud(cloudTarget);
+    NormalCloudPtr normalCloudPtrSource = estimateValidNormalCloud(cloudSource);
+    NormalCloudPtr normalCloudPtrTarget = estimateValidNormalCloud(cloudTarget);
 
-    pcl::SIFTKeypoint<pcl::PointNormal, pcl::PointWithScale> siftKeypointsSource
-     = getSIFTKeypoints(normalCloudPtrSource);
+    pcl::PointCloud<pcl::PointWithScale>::Ptr sourceSIFTKeypoints = 
+    getSIFTKeypoints(normalCloudPtrSource);
 
-    pcl::SIFTKeypoint<pcl::PointNormal, pcl::PointWithScale> siftKeypointsTarget
-     = getSIFTKeypoints(normalCloudPtrTarget);
+    pcl::PointCloud<pcl::PointWithScale>::Ptr siftKeypointsTarget =
+    getSIFTKeypoints(normalCloudPtrTarget);
 
     // 3) Get FPHP feature descriptors
 
