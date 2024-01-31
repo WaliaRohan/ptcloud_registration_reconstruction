@@ -158,21 +158,47 @@ pcl::PointCloud<pcl::PointWithScale>::Ptr getSIFTKeypoints(NormalCloudPtr cloud_
     return result;
 }
 
-void generateFPFHfeatures(NormalCloudPtr cloud)
+void generateFPFHfeatures(pcl::PointCloud<pcl::PointWithScale>::Ptr keypointCloud,
+                                                     NormalCloudPtr normalCloud)
 {
     // // Create FPFH estimation class object
     pcl::FPFHEstimation<pcl::PointXYZ, pcl::Normal, pcl::FPFHSignature33> fpfh;
-    //fpfh.setInputNormals(*cloud);
+    
+    // Convert pointwithscale keypoint cloud to xyz keypoint cloud
+    XYZCloudPtr xyzKeypointCloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::copyPointCloud(*keypointCloud, *xyzKeypointCloud);
 
-    // // Since no other search surface is given, we will create an empty kdtree
-    // // rerpesentation and pass it to the FPFH estimation object.
+    // Set keypointCloud as input cloud
+    fpfh.setInputCloud(xyzKeypointCloud);
+
+    // Generate xyz search surface from normalCloud
+    XYZCloudPtr xyzCloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::copyPointCloud(*normalCloud, *xyzCloud);
+    
+    // Set xyzcloud as search surface
+    fpfh.setSearchSurface(xyzCloud);
+    
+    // Convert pointNormal cloud to Normal cloud
+    pcl::PointCloud<pcl::Normal>::Ptr normal (new pcl::PointCloud<pcl::Normal>);
+    pcl::copyPointCloud(*normalCloud, *normal);
+
+    // Set this cloud as normal cloud
+    fpfh.setInputNormals(normal);
+
+    // Since no other search surface is given, we will create an empty kdtree
+    // rerpesentation and pass it to the FPFH estimation object.
     pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
-    // fpfh.setSearchMethod (tree);
+    fpfh.setSearchMethod (tree);
+    fpfh.setRadiusSearch(0.05); // radius used here has to be larger than that used for estimating surface normals
 
-    // // Output dataset
-    // pcl::PointCloud<pcl::FPFHSignature33>::Ptr fpfhs (new pcl::PointCloud<pcl::FPFHSignature33> ());
-    // fpfh.setRadiusSearch(0.05); // radius used here has to be larger than that used for estimating surface normals
+    // Output dataset
+    pcl::PointCloud<pcl::FPFHSignature33>::Ptr features_ptr (new pcl::PointCloud<pcl::FPFHSignature33>());
+    
+    std::cout << "Features estimation: Estimation object contstructed. Going to compute \n";
+    
+    fpfh.compute(*features_ptr);
 
+    std::cout << features_ptr->size() << " FPFH features for source cloud \n";
 }
 
 bool readPointCloud(std::string filePath, XYZCloudPtr cloudPtr)
@@ -184,6 +210,9 @@ bool readPointCloud(std::string filePath, XYZCloudPtr cloudPtr)
         PCL_ERROR("Couldn't read given file");
         return false;   
     }
+
+    std::vector<int> nan_idx;
+    pcl::removeNaNFromPointCloud(*cloudPtr, *cloudPtr, nan_idx);
 
     std::cout << "Loaded "
               << cloudPtr->size()
@@ -228,8 +257,8 @@ int main ()
     pcl::PointCloud<pcl::PointWithScale>::Ptr siftKeypointsTarget =
     getSIFTKeypoints(normalCloudPtrTarget);
 
-    // 3) Get FPHP feature descriptors
-
+    // 3) Get FPFH feature descriptors
+    generateFPFHfeatures(sourceSIFTKeypoints, normalCloudPtrSource);
 
     return 0;
 }
