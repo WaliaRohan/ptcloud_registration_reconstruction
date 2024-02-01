@@ -324,6 +324,39 @@ int main ()
 
     pcl::transformPointCloud (*cloudSource, *transformed_cloud, initialTransformation);
 
+    // The Iterative Closest Point algorithm
+    std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
+
+    pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
+    
+    int iterations = 10;  // Default number of ICP iterations
+
+    icp.setMaximumIterations (iterations);
+    icp.setInputSource (transformed_cloud);
+    icp.setInputTarget (cloudTarget);
+    icp.align (*transformed_cloud);
+    
+    std::chrono::high_resolution_clock::time_point finish = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> time_span = std::chrono::duration_cast<std::chrono::duration<double>>(finish-start);
+    
+    std::cout << "Applied " << iterations << " ICP iteration(s) in " << time_span.count() << " seconds." << std::endl;
+
+    if (icp.hasConverged ())
+    {
+        std::cout << "\nICP has converged, score is " << icp.getFitnessScore () << std::endl;
+        std::cout << "\nICP transformation " << iterations << " : cloud_icp -> cloud_in" << std::endl;
+        // transformation_matrix = icp.getFinalTransformation().cast<double>();
+        // print4x4Matrix (transformation_matrix);
+    }
+
+    else
+    {
+        PCL_ERROR ("\nICP has not converged.\n");
+        return (-1);
+    }
+
+    // Visualize
+
     pcl::visualization::PCLVisualizer viewer ("Matrix transformation example");
 
     // Define R,G,B colors for the point cloud
@@ -352,34 +385,3 @@ int main ()
     return 0;
 }
 
-// The Iterative Closest Point algorithm
-    // std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
-
-    // pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
-    
-    // int iterations = 10;  // Default number of ICP iterations
-
-    // icp.setMaximumIterations (iterations);
-    // icp.setInputSource (cloudSource);
-    // icp.setInputTarget (cloudTarget);
-    // icp.align (*cloudSource);
-    // icp.setMaximumIterations (1);  // We set this variable to 1 for the next time we will call .align () function
-    
-    // std::chrono::high_resolution_clock::time_point finish = std::chrono::high_resolution_clock::now();
-    // std::chrono::duration<double> time_span = std::chrono::duration_cast<std::chrono::duration<double>>(finish-start);
-    
-    // std::cout << "Applied " << iterations << " ICP iteration(s) in " << time_span.count() << " seconds." << std::endl;
-
-    // if (icp.hasConverged ())
-    // {
-    //     std::cout << "\nICP has converged, score is " << icp.getFitnessScore () << std::endl;
-    //     std::cout << "\nICP transformation " << iterations << " : cloud_icp -> cloud_in" << std::endl;
-    //     transformation_matrix = icp.getFinalTransformation().cast<double>();
-    //     // print4x4Matrix (transformation_matrix);
-    // }
-
-    // else
-    // {
-    //     PCL_ERROR ("\nICP has not converged.\n");
-    //     return (-1);
-    // }
