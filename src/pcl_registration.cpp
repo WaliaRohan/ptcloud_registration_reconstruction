@@ -19,9 +19,35 @@
 #include <vector> // for debugging
 #include <cmath>
 
+#include <pcl/common/transforms.h> // for transformPointCloud
+
+#include <pcl/registration/ia_ransac.h> // for sample consesus intial allignment
+#include <pcl/registration/icp.h> // for iterative allignment
+
 using XYZCloudPtr = pcl::PointCloud<pcl::PointXYZ>::Ptr;
 using NormalCloudPtr = pcl::PointCloud<pcl::PointNormal>::Ptr;
+using FPFH33Ptr = pcl::PointCloud<pcl::FPFHSignature33>::Ptr;
 
+bool readPointCloud(std::string filePath, XYZCloudPtr cloudPtr)
+{  
+    std::cout << "Attempting to load: " << filePath << std::endl;
+
+    if (pcl::io::loadPCDFile<pcl::PointXYZ> (filePath, *cloudPtr) == -1)
+    {
+        PCL_ERROR("Couldn't read given file");
+        return false;   
+    }
+
+    std::vector<int> nan_idx;
+    pcl::removeNaNFromPointCloud(*cloudPtr, *cloudPtr, nan_idx);
+
+    std::cout << "Loaded "
+              << cloudPtr->size()
+              << " data points from given file"
+              << std::endl;
+
+    return true;
+}
 
 void visualizePointCloud(XYZCloudPtr cloudPtr)
 {
@@ -158,10 +184,10 @@ pcl::PointCloud<pcl::PointWithScale>::Ptr getSIFTKeypoints(NormalCloudPtr cloud_
     return result;
 }
 
-void generateFPFHfeatures(pcl::PointCloud<pcl::PointWithScale>::Ptr keypointCloud,
+FPFH33Ptr generateFPFHfeatures(pcl::PointCloud<pcl::PointWithScale>::Ptr keypointCloud,
                                                      NormalCloudPtr normalCloud)
 {
-    // // Create FPFH estimation class object
+    // Create FPFH estimation class object
     pcl::FPFHEstimation<pcl::PointXYZ, pcl::Normal, pcl::FPFHSignature33> fpfh;
     
     // Convert pointwithscale keypoint cloud to xyz keypoint cloud
@@ -188,38 +214,61 @@ void generateFPFHfeatures(pcl::PointCloud<pcl::PointWithScale>::Ptr keypointClou
     // Since no other search surface is given, we will create an empty kdtree
     // rerpesentation and pass it to the FPFH estimation object.
     pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
-    fpfh.setSearchMethod (tree);
+    fpfh.setSearchMethod(tree);
     fpfh.setRadiusSearch(0.05); // radius used here has to be larger than that used for estimating surface normals
 
     // Output dataset
-    pcl::PointCloud<pcl::FPFHSignature33>::Ptr features_ptr (new pcl::PointCloud<pcl::FPFHSignature33>());
+    FPFH33Ptr features_ptr (new pcl::PointCloud<pcl::FPFHSignature33>());
     
-    std::cout << "Features estimation: Estimation object contstructed. Going to compute \n";
+    std::cout << "Feature estimation: Estimation object contstructed. Going to compute \n";
     
     fpfh.compute(*features_ptr);
 
-    std::cout << features_ptr->size() << " FPFH features for source cloud \n";
+    std::cout << "Feature estimation: Computed " 
+              << features_ptr->size() 
+              << " FPFH features for source cloud \n";
+
+    return features_ptr;
 }
 
-bool readPointCloud(std::string filePath, XYZCloudPtr cloudPtr)
-{  
-    std::cout << "Attempting to load: " << filePath << std::endl;
+Eigen::Matrix4f guessSampleConsesusInitialAlignment(pcl::PointCloud<pcl::PointWithScale>::Ptr sourceKeypoints,
+                                         pcl::PointCloud<pcl::PointWithScale>::Ptr targetKeypoints, 
+                                         FPFH33Ptr sourceFeatures,
+                                         FPFH33Ptr targetFeatures,
+                                         XYZCloudPtr alignedPointCloud)
+{
+    pcl::SampleConsensusInitialAlignment<pcl::PointWithScale, pcl::PointWithScale, pcl::FPFHSignature33> scia;
 
-    if (pcl::io::loadPCDFile<pcl::PointXYZ> (filePath, *cloudPtr) == -1)
-    {
-        PCL_ERROR("Couldn't read given file");
-        return false;   
-    }
+    // Sample Consensus Initial Alignment parameters (explanation below)
+    const float min_sample_dist = 0.025f; // The minimum distance between any two random samples
+    const float max_correspondence_dist = 0.01f; // The maximum distance between a point and its nearest neighbor correspondent in order to be considered in the alignment process
+    const int nr_iters = 500; // The number of RANSAC iterations to perform
 
-    std::vector<int> nan_idx;
-    pcl::removeNaNFromPointCloud(*cloudPtr, *cloudPtr, nan_idx);
+    // set input, output pointclouds and features
+    scia.setInputSource(sourceKeypoints);
+    scia.setSourceFeatures(sourceFeatures);
 
-    std::cout << "Loaded "
-              << cloudPtr->size()
-              << " data points from given file"
-              << std::endl;
+    scia.setInputTarget(targetKeypoints);
+    scia.setTargetFeatures(targetFeatures);
 
-    return true;
+    scia.setMinSampleDistance(min_sample_dist);
+    scia.setMaxCorrespondenceDistance(max_correspondence_dist);
+    scia.setMaximumIterations(nr_iters);
+
+    pcl::PointCloud<pcl::PointWithScale> registration_output;
+    scia.align(registration_output); 
+
+    // Convert pointwithscale keypoint cloud to xyz cloud
+    pcl::copyPointCloud(registration_output, *alignedPointCloud);
+
+    Eigen::Matrix4f transformation = scia.getFinalTransformation();
+
+    std::cout << "Sample Conensus: Calculatead new pointcloud of size: "
+              << registration_output.size() << std::endl;
+
+    std::cout << transformation << std::endl;
+
+    return transformation;
 }
 
 // This might come in handy: https://stackoverflow.com/questions/44605198/pointcloud-library-compute-sift-keypoints-input-cloud-error
@@ -254,11 +303,83 @@ int main ()
     pcl::PointCloud<pcl::PointWithScale>::Ptr sourceSIFTKeypoints = 
     getSIFTKeypoints(normalCloudPtrSource);
 
-    pcl::PointCloud<pcl::PointWithScale>::Ptr siftKeypointsTarget =
+    pcl::PointCloud<pcl::PointWithScale>::Ptr targetSIFTKeypoints =
     getSIFTKeypoints(normalCloudPtrTarget);
 
     // 3) Get FPFH feature descriptors
-    generateFPFHfeatures(sourceSIFTKeypoints, normalCloudPtrSource);
+    FPFH33Ptr sourceFPFHFeature =
+     generateFPFHfeatures(sourceSIFTKeypoints, normalCloudPtrSource);
+
+    FPFH33Ptr targetFPFHFeature = 
+     generateFPFHfeatures(targetSIFTKeypoints, normalCloudPtrTarget);
+
+    XYZCloudPtr alignedPointCloud(new pcl::PointCloud<pcl::PointXYZ>);
+
+    Eigen::Matrix4f initialTransformation = 
+    guessSampleConsesusInitialAlignment(sourceSIFTKeypoints, targetSIFTKeypoints,
+                                    sourceFPFHFeature, targetFPFHFeature,
+                                    alignedPointCloud);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
+
+    pcl::transformPointCloud (*cloudSource, *transformed_cloud, initialTransformation);
+
+    pcl::visualization::PCLVisualizer viewer ("Matrix transformation example");
+
+    // Define R,G,B colors for the point cloud
+    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> source_cloud_color_handler (cloudSource, 0, 255, 0); // Green
+    // We add the point cloud to the viewer and pass the color handler
+    viewer.addPointCloud (cloudSource, source_cloud_color_handler, "original_cloud");
+
+    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> transformed_cloud_color_handler (transformed_cloud, 0, 0, 255); // Blue
+    viewer.addPointCloud (transformed_cloud, transformed_cloud_color_handler, "transformed_cloud");
+
+    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> target_cloud_color_handler (cloudTarget, 255, 0, 0); // Red
+    viewer.addPointCloud(cloudTarget, target_cloud_color_handler, "target_cloud");
+
+    viewer.addCoordinateSystem (1.0, "cloud", 0);
+    viewer.setBackgroundColor(0.05, 0.05, 0.05, 0); // Setting background to a dark grey
+    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "original_cloud");
+    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "transformed_cloud");
+    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "target_cloud");
+
+    //viewer.setPosition(800, 400); // Setting visualiser window position
+    while (!viewer.wasStopped ()) { // Display the visualiser until 'q' key is pressed
+        viewer.spin();
+    }
+
 
     return 0;
 }
+
+// The Iterative Closest Point algorithm
+    // std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
+
+    // pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
+    
+    // int iterations = 10;  // Default number of ICP iterations
+
+    // icp.setMaximumIterations (iterations);
+    // icp.setInputSource (cloudSource);
+    // icp.setInputTarget (cloudTarget);
+    // icp.align (*cloudSource);
+    // icp.setMaximumIterations (1);  // We set this variable to 1 for the next time we will call .align () function
+    
+    // std::chrono::high_resolution_clock::time_point finish = std::chrono::high_resolution_clock::now();
+    // std::chrono::duration<double> time_span = std::chrono::duration_cast<std::chrono::duration<double>>(finish-start);
+    
+    // std::cout << "Applied " << iterations << " ICP iteration(s) in " << time_span.count() << " seconds." << std::endl;
+
+    // if (icp.hasConverged ())
+    // {
+    //     std::cout << "\nICP has converged, score is " << icp.getFitnessScore () << std::endl;
+    //     std::cout << "\nICP transformation " << iterations << " : cloud_icp -> cloud_in" << std::endl;
+    //     transformation_matrix = icp.getFinalTransformation().cast<double>();
+    //     // print4x4Matrix (transformation_matrix);
+    // }
+
+    // else
+    // {
+    //     PCL_ERROR ("\nICP has not converged.\n");
+    //     return (-1);
+    // }
