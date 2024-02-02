@@ -271,31 +271,8 @@ Eigen::Matrix4f guessSampleConsesusInitialAlignment(pcl::PointCloud<pcl::PointWi
     return transformation;
 }
 
-// This might come in handy: https://stackoverflow.com/questions/44605198/pointcloud-library-compute-sift-keypoints-input-cloud-error
-
-int main ()
+XYZCloudPtr runRegistration(XYZCloudPtr cloudSource, XYZCloudPtr cloudTarget)
 {
-
-    std::string folderPath = 
-    "/home/speedracer1702/Projects/Black_I/surface_reconstruction/data/living_room/pcd/";
-    
-    std::string file1 = folderPath + "livingRoomData_pt_1.pcd";
-    std::string file2 = folderPath + "livingRoomData_pt_2.pcd";
-
-    // 1) Data Acquisition - acquire pair of pointclouds
-
-    // Read first point cloud
-    XYZCloudPtr cloudSource(new pcl::PointCloud<pcl::PointXYZ>);
-    if (!readPointCloud(file1, cloudSource))
-        return -1;
-
-    // Read second point cloud
-    XYZCloudPtr cloudTarget(new pcl::PointCloud<pcl::PointXYZ>);
-    if (!readPointCloud(file2, cloudTarget))
-        return -1;
-
-    std::cout << "Estimating keypoints" << std::endl;
-
     // 2) Keypoint estimatation
     NormalCloudPtr normalCloudPtrSource = estimateValidNormalCloud(cloudSource);
     NormalCloudPtr normalCloudPtrTarget = estimateValidNormalCloud(cloudTarget);
@@ -352,34 +329,81 @@ int main ()
     else
     {
         PCL_ERROR ("\nICP has not converged.\n");
-        return (-1);
     }
 
-    // Visualize
+    return transformed_cloud;
+}
 
+// This might come in handy: https://stackoverflow.com/questions/44605198/pointcloud-library-compute-sift-keypoints-input-cloud-error
+
+int main ()
+{
+    std::string folderPath = 
+    "/home/speedracer1702/Projects/Black_I/surface_reconstruction/data/living_room/pcd/";
+    
+    std::string file1 = folderPath + "livingRoomData_pt_1.pcd";
+    std::string file2 = folderPath + "livingRoomData_pt_2.pcd";
+
+    // Read first point cloud
+    XYZCloudPtr cloudSource(new pcl::PointCloud<pcl::PointXYZ>);
+    if (!readPointCloud(file1, cloudSource))
+        return -1;
+
+    // Read second point cloud
+    XYZCloudPtr cloudTarget(new pcl::PointCloud<pcl::PointXYZ>);
+    if (!readPointCloud(file2, cloudTarget))
+        return -1;
+
+    XYZCloudPtr transformed_cloud = runRegistration(cloudTarget, cloudSource);
+        
+    int totalPointClouds = 5;
+
+    // Setup pointcloud viewer
     pcl::visualization::PCLVisualizer viewer ("Matrix transformation example");
-
-    // Define R,G,B colors for the point cloud
-    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> source_cloud_color_handler (cloudSource, 0, 255, 0); // Green
-    // We add the point cloud to the viewer and pass the color handler
-    viewer.addPointCloud (cloudSource, source_cloud_color_handler, "original_cloud");
-
-    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> transformed_cloud_color_handler (transformed_cloud, 0, 0, 255); // Blue
-    viewer.addPointCloud (transformed_cloud, transformed_cloud_color_handler, "transformed_cloud");
-
-    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> target_cloud_color_handler (cloudTarget, 255, 0, 0); // Red
-    viewer.addPointCloud(cloudTarget, target_cloud_color_handler, "target_cloud");
-
     viewer.addCoordinateSystem (1.0, "cloud", 0);
     viewer.setBackgroundColor(0.05, 0.05, 0.05, 0); // Setting background to a dark grey
-    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "original_cloud");
-    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "transformed_cloud");
-    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "target_cloud");
+
+    viewer.addPointCloud(transformed_cloud, "pointCloud_1");
+
+    for (int i = 2; i <= totalPointClouds; i++)
+    {
+        std::string next_ptCloud_name = folderPath + "livingRoomData_pt_" + std::to_string(i) + ".pcd";
+
+        // Read next pointCloud
+        XYZCloudPtr nextPointCloud(new pcl::PointCloud<pcl::PointXYZ>);
+        if (!readPointCloud(next_ptCloud_name, nextPointCloud))
+            return -1;
+
+        transformed_cloud = runRegistration(nextPointCloud, transformed_cloud);
+
+        viewer.addPointCloud(transformed_cloud, "pointCloud_" + std::to_string(i));
+    }
+
+    // 1) Data Acquisition - acquire pair of pointclouds
 
     //viewer.setPosition(800, 400); // Setting visualiser window position
     while (!viewer.wasStopped ()) { // Display the visualiser until 'q' key is pressed
         viewer.spin();
     }
+
+    // // Define R,G,B colors for the point cloud
+    // pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> source_cloud_color_handler (cloudSource, 0, 255, 0); // Green
+    // // We add the point cloud to the viewer and pass the color handler
+    // viewer.addPointCloud (cloudSource, source_cloud_color_handler, "original_cloud");
+
+    // pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> transformed_cloud_color_handler (transformed_cloud, 0, 0, 255); // Blue
+    // viewer.addPointCloud (transformed_cloud, transformed_cloud_color_handler, "transformed_cloud");
+
+    // pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> target_cloud_color_handler (cloudTarget, 255, 0, 0); // Red
+    // viewer.addPointCloud(cloudTarget, target_cloud_color_handler, "target_cloud");
+
+    // viewer.addCoordinateSystem (1.0, "cloud", 0);
+    // viewer.setBackgroundColor(0.05, 0.05, 0.05, 0); // Setting background to a dark grey
+    // viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "original_cloud");
+    // viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "transformed_cloud");
+    // viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "target_cloud");
+
+    
 
 
     return 0;
